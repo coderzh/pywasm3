@@ -257,13 +257,14 @@ m3ApiRawFunction(CallImport)
     IM3Function f = _ctx->function;
     int nArgs = m3_GetArgCount(f);
     int nRets = m3_GetRetCount(f);
+    int nArgsOffset = m3ApiArgOffset(nRets);
     PyObject *pArgs = PyTuple_New(nArgs);
     if (!pArgs) {
         m3ApiTrap("python call: args not allocated");
     }
 
     for (Py_ssize_t i = 0; i < nArgs; ++i) {
-        PyObject *arg = get_arg_from_stack(&_sp[i+nRets], m3_GetArgType(f, i));
+        PyObject *arg = get_arg_from_stack(&_sp[i+nArgsOffset], m3_GetArgType(f, i));
         PyTuple_SET_ITEM(pArgs, i, arg);
     }
 
