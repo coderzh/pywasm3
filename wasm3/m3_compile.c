@@ -1019,14 +1019,14 @@ M3Result  ReturnValues  (IM3Compilation o, IM3CompilationScope i_functionBlock, 
     if (numReturns)
     {
         // return slots like args are 64-bit aligned
-        u16 returnSlot = numReturns * c_ioSlotCount;
-        u16 stackTop = GetStackTopIndex (o);
+        u16 returnSlot = 0;
+        u16 stackTop = GetStackTopIndex (o) - numReturns + 1;
 
         for (u16 i = 0; i < numReturns; ++i)
         {
-            u8 returnType = GetFuncTypeResultType (i_functionBlock->type, numReturns - 1 - i);
+            u8 returnType = GetFuncTypeResultType (i_functionBlock->type, i);
 
-            u8 stackType = GetStackTypeFromTop (o, i);  // using FromTop so that only dynamic items are checked
+            u8 stackType = GetStackTypeFromTop (o, numReturns - 1 - i);  // using FromTop so that only dynamic items are checked
 
             if (IsStackPolymorphic (o) and stackType == c_m3Type_none)
                 stackType = returnType;
@@ -1035,8 +1035,10 @@ M3Result  ReturnValues  (IM3Compilation o, IM3CompilationScope i_functionBlock, 
 
             if (not IsStackPolymorphic (o))
             {
-                returnSlot -= c_ioSlotCount;
-_               (CopyStackIndexToSlot (o, returnSlot, stackTop--));
+                if (stackTop >= 0 && o->wasmStack [stackTop] != returnSlot)
+_                   (CopyStackIndexToSlot (o, returnSlot, stackTop));
+                stackTop++;
+                returnSlot += c_ioSlotCount;
             }
         }
 
@@ -1117,10 +1119,10 @@ _   (Read_u8 (& opcode, & o->wasm, o->wasmEnd));             m3log (compile, d_i
 
     //printf("Extended opcode: 0x%x\n", i_opcode);
 
-    IM3OpInfo opInfo = GetOpInfo (i_opcode);
-    _throwif (m3Err_unknownOpcode, not opInfo);
+    const M3OpInfo* opinfo = GetOpInfo (i_opcode);
+    _throwif (m3Err_unknownOpcode, not opinfo);
 
-    M3Compiler compiler = opInfo->compiler;
+    M3Compiler compiler = opinfo->compiler;
     _throwif (m3Err_noCompiler, not compiler);
 
 _   ((* compiler) (o, i_opcode));
@@ -1543,7 +1545,7 @@ _       (Pop (o));
     u16 numArgs = GetFuncTypeNumParams (i_type);
     u16 numRets = GetFuncTypeNumResults (i_type);
 
-    u16 argTop = topSlot + (numArgs + numRets) * c_ioSlotCount;
+    u16 argTop = topSlot + (numArgs + m3ApiArgOffset(numRets)) * c_ioSlotCount;
 
     while (numArgs--)
     {
@@ -2012,10 +2014,9 @@ M3Result  Compile_Operator  (IM3Compilation o, m3opcode_t i_opcode)
 {
     M3Result result;
 
-    IM3OpInfo opInfo = GetOpInfo (i_opcode);
-    _throwif (m3Err_unknownOpcode, not opInfo);
+    const M3OpInfo * op = GetOpInfo(i_opcode);
 
-    IM3Operation op;
+    IM3Operation operation;
 
     // This preserve is for for FP compare operations.
     // either need additional slot destination operations or the
@@ -2023,64 +2024,64 @@ M3Result  Compile_Operator  (IM3Compilation o, m3opcode_t i_opcode)
     // moving out the way might be the optimal solution most often?
     // otherwise, the _r0 reg can get buried down in the stack
     // and be idle & wasted for a moment.
-    if (IsFpType (GetStackTopType (o)) and IsIntType (opInfo->type))
+    if (IsFpType (GetStackTopType (o)) and IsIntType (op->type))
     {
-_       (PreserveRegisterIfOccupied (o, opInfo->type));
+_       (PreserveRegisterIfOccupied (o, op->type));
     }
 
-    if (opInfo->stackOffset == 0)
+    if (op->stackOffset == 0)
     {
         if (IsStackTopInRegister (o))
         {
-            op = opInfo->operations [0]; // _s
+            operation = op->operations [0]; // _s
         }
         else
         {
-_           (PreserveRegisterIfOccupied (o, opInfo->type));
-            op = opInfo->operations [1]; // _r
+_           (PreserveRegisterIfOccupied (o, op->type));
+            operation = op->operations [1]; // _r
         }
     }
     else
     {
         if (IsStackTopInRegister (o))
         {
-            op = opInfo->operations [0];  // _rs
+            operation = op->operations [0];  // _rs
 
             if (IsStackTopMinus1InRegister (o))
             {                                       d_m3Assert (i_opcode == 0x38 or i_opcode == 0x39);
-                op = opInfo->operations [3]; // _rr for fp.store
+                operation = op->operations [3]; // _rr for fp.store
             }
         }
         else if (IsStackTopMinus1InRegister (o))
         {
-            op = opInfo->operations [1]; // _sr
+            operation = op->operations [1]; // _sr
 
-            if (not op)  // must be commutative, then
-                op = opInfo->operations [0];
+            if (not operation)  // must be commutative, then
+                operation = op->operations [0];
         }
         else
         {
-_           (PreserveRegisterIfOccupied (o, opInfo->type));     // _ss
-            op = opInfo->operations [2];
+_           (PreserveRegisterIfOccupied (o, op->type));     // _ss
+            operation = op->operations [2];
         }
     }
 
-    if (op)
+    if (operation)
     {
-_       (EmitOp (o, op));
+_       (EmitOp (o, operation));
 
 _       (EmitSlotNumOfStackTopAndPop (o));
 
-        if (opInfo->stackOffset < 0)
+        if (op->stackOffset < 0)
 _           (EmitSlotNumOfStackTopAndPop (o));
 
-        if (opInfo->type != c_m3Type_none)
-_           (PushRegister (o, opInfo->type));
+        if (op->type != c_m3Type_none)
+_           (PushRegister (o, op->type));
     }
     else
     {
 #       ifdef DEBUG
-            result = ErrorCompile ("no operation found for opcode", o, "'%s'", opInfo->name);
+            result = ErrorCompile ("no operation found for opcode", o, "'%s'", op->name);
 #       else
             result = ErrorCompile ("no operation found for opcode", o, "%x", i_opcode);
 #       endif
@@ -2095,9 +2096,7 @@ M3Result  Compile_Convert  (IM3Compilation o, m3opcode_t i_opcode)
 {
     M3Result result = m3Err_none;
 
-_try {
-    IM3OpInfo opInfo = GetOpInfo (i_opcode);
-    _throwif (m3Err_unknownOpcode, not opInfo);
+    const M3OpInfo * opInfo = GetOpInfo(i_opcode);
 
     bool destInSlot = IsRegisterTypeAllocated (o, opInfo->type);
     bool sourceInSlot = IsStackTopInSlot (o);
@@ -2112,7 +2111,6 @@ _       (PushAllocatedSlotAndEmit (o, opInfo->type))
     else
 _       (PushRegister (o, opInfo->type))
 
-}
     _catch: return result;
 }
 
@@ -2127,10 +2125,9 @@ _try {
 _   (ReadLEB_u32 (& alignHint, & o->wasm, o->wasmEnd));
 _   (ReadLEB_u32 (& memoryOffset, & o->wasm, o->wasmEnd));
                                                                         m3log (compile, d_indent " (offset = %d)", get_indention_string (o), memoryOffset);
-    IM3OpInfo opInfo = GetOpInfo (i_opcode);
-    _throwif (m3Err_unknownOpcode, not opInfo);
+    const M3OpInfo * op = GetOpInfo(i_opcode);
 
-    if (IsFpType (opInfo->type))
+    if (IsFpType (op->type))
 _       (PreserveRegisterIfOccupied (o, c_m3Type_f64));
 
 _   (Compile_Operator (o, i_opcode));
@@ -2445,8 +2442,7 @@ const M3OpInfo c_operationsFC [] =
 # endif
 };
 
-
-IM3OpInfo  GetOpInfo  (m3opcode_t opcode)
+const M3OpInfo*  GetOpInfo  (m3opcode_t opcode)
 {
     switch (opcode >> 8) {
     case 0x00:
@@ -2487,7 +2483,7 @@ _       (Read_opcode (& opcode, & o->wasm, o->wasmEnd));                log_opco
             }
         }
 
-        IM3OpInfo opinfo = GetOpInfo (opcode);
+        IM3OpInfo opinfo = GetOpInfo(opcode);
 
         if (opinfo == NULL)
             _throw (ErrorCompile (m3Err_unknownOpcode, o, "opcode '%x' not available", opcode));
@@ -2655,7 +2651,6 @@ M3Result  CompileLocals  (IM3Compilation o)
 {
     M3Result result;
 
-    u32 numLocals = 0;
     u32 numLocalBlocks;
 _   (ReadLEB_u32 (& numLocalBlocks, & o->wasm, o->wasmEnd));
 
@@ -2668,13 +2663,10 @@ _   (ReadLEB_u32 (& numLocalBlocks, & o->wasm, o->wasmEnd));
 _       (ReadLEB_u32 (& varCount, & o->wasm, o->wasmEnd));
 _       (ReadLEB_i7 (& waType, & o->wasm, o->wasmEnd));
 _       (NormalizeType (& localType, waType));
-        numLocals += varCount;                                                          m3log (compile, "pushing locals. count: %d; type: %s", varCount, c_waTypes [localType]);
+                                                                                                m3log (compile, "pushing locals. count: %d; type: %s", varCount, c_waTypes [localType]);
         while (varCount--)
 _           (PushAllocatedSlot (o, localType));
     }
-
-    if (o->function)
-        o->function->numLocals = numLocals;
 
     _catch: return result;
 }
@@ -2747,7 +2739,8 @@ _   (AcquireCompilationCodePage (o, & o->page));
 
     pc_t pc = GetPagePC (o->page);
 
-    u16 numRetSlots = GetFunctionNumReturns (o->function) * c_ioSlotCount;
+    u16 numRets = GetFunctionNumReturns (o->function);
+    u16 numRetSlots = m3ApiArgOffset(numRets) * c_ioSlotCount;
 
     for (u16 i = 0; i < numRetSlots; ++i)
         MarkSlotAllocated (o, i);

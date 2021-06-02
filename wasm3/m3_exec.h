@@ -622,7 +622,7 @@ d_m3Op  (CallRawFunction)
 
     const int nArgs = ftype->numArgs;
     const int nRets = ftype->numRets;
-    u64 * args = sp + nRets;
+    u64 * args = sp + m3ApiArgOffset(nRets);
     for (int i=0; i<nArgs; i++) {
         const int type = ftype->types[nRets + i];
         switch (type) {
@@ -781,7 +781,7 @@ d_m3Op  (Entry)
 #if d_m3SkipStackCheck
     if (true)
 #else
-    if (LIKELY ((void *) (_sp + function->maxStackSlots) < _mem->maxStack))
+    if (LIKELY((void *)((m3slot_t *) _sp + function->maxStackSlots) < _mem->maxStack))
 #endif
     {
 #if defined(DEBUG)
@@ -798,7 +798,7 @@ d_m3Op  (Entry)
         }
 
 #if d_m3EnableStrace >= 2
-        d_m3TracePrint("%s %s {", m3_GetFunctionName(function), SPrintFunctionArgList (function, _sp + function->numRetSlots));
+        d_m3TracePrint("%s %s {", m3_GetFunctionName(function), SPrintFunctionArgList (function, _sp));
         trace_rt->callDepth++;
 #endif
 
